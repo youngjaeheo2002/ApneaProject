@@ -88,14 +88,20 @@ for patient in patient_data_dictionary:
     patient_data_dictionary[patient]['events']['start-datetime'] = pd.to_datetime(patient_data_dictionary[patient]['events']['start'], unit='s')
     patient_data_dictionary[patient]['events']['end-datetime'] = patient_data_dictionary[patient]['events']['start-datetime'] + pd.to_timedelta(patient_data_dictionary[patient]['events']['duration'], unit='s')
 
-matrix = np.empty ((0,10))
+
+num_features_and_label = 17
+
+matrix = np.empty ((0,num_features_and_label))
 sample_rate = 64
 
 dummy = patient_data_dictionary
 for patient in dummy:
+    apnea_matrix = np.empty ((0,num_features_and_label))
+    non_apnea_matrix = np.empty ((0,num_features_and_label))
     events = dummy[patient]['events']
     ppg_signal = dummy[patient]['ppg']
     apnea = events[events['name'].isin(apnea_labels)]
+    
     ppg_signal.set_index('ts-datetime', inplace=True)
 
     # Define the frequency for the intervals (e.g., '10S' for 10-second intervals)
@@ -107,17 +113,24 @@ for patient in dummy:
     # Now ppg_10s_intervals contains the DataFrame divided into 10-second intervals
     # You can access individual groups using the get_group method
     for interval, data in ppg_10s_intervals:
+        label = 0
+
         ppg = data
         overlapping_apnea = apnea[(apnea['start-datetime'] <= interval  + pd.to_timedelta(10,unit = 's')) & (apnea['end-datetime'] >=interval)]
-        # ppg['ch2'] = (ppg['ch2'] - ppg['ch2'].min(axis = 0))/(ppg['ch2'].max(axis=0)-ppg['ch2'].min(axis=0))
+        ppg['ch2'] = (ppg['ch2'] - ppg['ch2'].min(axis = 0))/(ppg['ch2'].max(axis=0)-ppg['ch2'].min(axis=0))
         ppg = ppg['ch2']
+        isApnea = not overlapping_apnea.empty
+        if isApnea:
+                label = 1
+        
         try:
-            label = 0
+            
+            #filter data
+            ppg = hp.filter_signal(ppg,cutoff = [0.7,3.5],sample_rate = 64, order = 3, filtertype = 'bandpass')
             wd,m = hp.process(ppg,sample_rate = sample_rate)
 
             #['bpm', 'ibi', 'sdnn', 'sdsd', 'rmssd', 'pnn20', 'pnn50', 'hr_mad', 'sd1', 'sd2', 's', 'sd1/sd2', 'breathingrate']
         # Basic metrics
-            print(m)
             heart_rate = m['bpm']  # Heart Rate in BPM
             ibi = m['ibi']  # Average Interbeat Interval
             sdnn = m['sdnn']  # Standard Deviation of NN intervals
@@ -132,16 +145,15 @@ for patient in dummy:
             var = np.var(ppg)
 
 
-
-            if not overlapping_apnea.empty:
-
-                label = 1
-
-            feature_row = np.array([heart_rate,ibi,sdnn,sdsd,rmssd,pnn50,std,mean,var,label])
-            feature_row = np.nan_to_num(feature_row,nan=-1)
-            matrix = np.vstack([matrix,feature_row])
-
-
+            feature_row = np.array([heart_rate,ibi,sdnn,sdsd,rmssd,m['pnn20'],pnn50,m['hr_mad'],m['sd1'],m['sd2'],m['s'],m['sd1/sd2'],m['breathingrate'],std,mean,var,label])
+            if not np.isnan(feature_row).any():
+                #print(f"Successfully processed: f{feature_row}")
+                if isApnea:
+                    apnea_matrix = np.vstack([apnea_matrix,feature_row])
+            
+                else:
+                    non_apnea_matrix = np.vstack([non_apnea_matrix,feature_row])
+            
 
         except hp.exceptions.BadSignalWarning as e:
             pass
@@ -151,29 +163,13 @@ for patient in dummy:
         except:
             print('error')
 
+    random_indices = np.random.choice(non_apnea_matrix.shape[0], size = apnea_matrix.shape[0], replace = False)
+    matrix = np.vstack([matrix,apnea_matrix])
+    matrix = np.vstack([matrix,non_apnea_matrix[random_indices,:]])
+    print(f"apnea_matrix length: {apnea_matrix.shape[0]}, non_apnea_matrix length = {non_apnea_matrix.shape[0]}, matrix length = {matrix.shape[0]}")
+
+
+#
+print(matrix)
 
 pd.DataFrame(matrix).to_csv('./matrix.csv',index = True)
-
-
-def plotFeatures(labels,features,fileName,featureName):
-    plt.scatter(x = labels, y = features)
-    plt.title(featureName)
-    plt.ylabel(featureName)
-    plt.xlabel('apnea = 1, non-apnea = 0')
-    plt.savefig(fileName)
-    plt.clf()
-
-
-#plotting heart rate
-labels = matrix[:,9]
-
-featureNames = ['Heart Rate (BPM)','IBI','SDNN','SDSD','RMSSD','PNN50','STDS','MEANS','VARS']
-
-for i in range(len(featureNames)):
-    featureName = featureNames[i]
-
-    features = matrix[:,i]
-
-    plotFeatures(labels,features,f"./visualizations/{featureName}.png",featureName)
-
-
