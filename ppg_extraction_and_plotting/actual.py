@@ -1,5 +1,13 @@
 #import libraries
+from datetime import datetime
 
+# Get the current date and time
+start_datetime = datetime.now()
+
+# Format the datetime object as a string
+formatted_start_datetime = start_datetime.strftime("%Y-%m-%d %H:%M:%S")
+
+print(f"Started at {formatted_start_datetime}")
 import numpy as np 
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -89,15 +97,16 @@ for patient in patient_data_dictionary:
     patient_data_dictionary[patient]['events']['end-datetime'] = patient_data_dictionary[patient]['events']['start-datetime'] + pd.to_timedelta(patient_data_dictionary[patient]['events']['duration'], unit='s')
 
 
-num_features_and_label = 17
+column_names = ['patient_Id','bpm', 'ibi', 'sdnn', 'sdsd', 'rmssd', 'pnn20', 'pnn50', 'hr_mad', 'sd1', 'sd2', 's', 'sd1/sd2', 'breathingrate','std','mean','var','apnea']
+return_Df = pd.DataFrame(columns=column_names)
 
-matrix = np.empty ((0,num_features_and_label))
+
 sample_rate = 64
-
+patient_Ids = []
 dummy = patient_data_dictionary
 for patient in dummy:
-    apnea_matrix = np.empty ((0,num_features_and_label))
-    non_apnea_matrix = np.empty ((0,num_features_and_label))
+    apnea_matrix = pd.DataFrame(columns = column_names)
+    non_apnea_matrix = pd.DataFrame(columns = column_names)
     events = dummy[patient]['events']
     ppg_signal = dummy[patient]['ppg']
     apnea = events[events['name'].isin(apnea_labels)]
@@ -117,7 +126,8 @@ for patient in dummy:
 
         ppg = data
         overlapping_apnea = apnea[(apnea['start-datetime'] <= interval  + pd.to_timedelta(10,unit = 's')) & (apnea['end-datetime'] >=interval)]
-        ppg['ch2'] = (ppg['ch2'] - ppg['ch2'].min(axis = 0))/(ppg['ch2'].max(axis=0)-ppg['ch2'].min(axis=0))
+        if not ppg['ch2'].empty and (ppg['ch2'].max(axis=0) - ppg['ch2'].min(axis=0)) != 0:
+            ppg.loc[:, 'ch2'] = (ppg['ch2'] - ppg['ch2'].min(axis=0)) / (ppg['ch2'].max(axis=0) - ppg['ch2'].min(axis=0))
         ppg = ppg['ch2']
         isApnea = not overlapping_apnea.empty
         if isApnea:
@@ -144,15 +154,36 @@ for patient in dummy:
             mean = np.mean(ppg)
             var = np.var(ppg)
 
+            #['patient_Id','bpm', 'ibi', 'sdnn', 'sdsd', 'rmssd', 'pnn20', 'pnn50', 'hr_mad', 'sd1', 'sd2', 's', 'sd1_sd2_ratio', 'breathingrate','std','mean','var','apnea']
+            #feature_row = [patient,heart_rate,ibi,sdnn,sdsd,rmssd,m['pnn20'],pnn50,m['hr_mad'],m['sd1'],m['sd2'],m['s'],m['sd1/sd2'],m['breathingrate'],std,mean,var,label]
+            feature_row = {
+                'patient_Id':patient,
+                'std':std,
+                'mean':mean,
+                'var':var,
+                'apnea':label
+            }
 
-            feature_row = np.array([heart_rate,ibi,sdnn,sdsd,rmssd,m['pnn20'],pnn50,m['hr_mad'],m['sd1'],m['sd2'],m['s'],m['sd1/sd2'],m['breathingrate'],std,mean,var,label])
-            if not np.isnan(feature_row).any():
-                #print(f"Successfully processed: f{feature_row}")
+            feature_row = {**m,**feature_row}
+            feature_row = pd.DataFrame([feature_row])
+
+            is_null = feature_row.isnull()
+
+            # Check for 'masked' values
+            is_masked = feature_row == 'masked'
+
+            # Combine the checks
+            either_condition = is_null | is_masked
+
+            # Check if any value in the DataFrame is either NaN or 'masked'
+            contains_nan_or_masked = either_condition.any().any()
+            if not contains_nan_or_masked:
+                #print(f"Successfully processed!")
                 if isApnea:
-                    apnea_matrix = np.vstack([apnea_matrix,feature_row])
+                    apnea_matrix = pd.concat([apnea_matrix,feature_row])
             
                 else:
-                    non_apnea_matrix = np.vstack([non_apnea_matrix,feature_row])
+                    non_apnea_matrix = pd.concat([non_apnea_matrix,feature_row])
             
 
         except hp.exceptions.BadSignalWarning as e:
@@ -160,16 +191,28 @@ for patient in dummy:
             #print("Bad signal quality. Consider checking the data or further preprocessing.")
 
 
-        except:
-            print('error')
+        except Exception as e:
+            print(f"An error occurred: {e.__class__.__name__}")
+            print(f"Error message: {e}")
 
-    random_indices = np.random.choice(non_apnea_matrix.shape[0], size = apnea_matrix.shape[0], replace = False)
-    matrix = np.vstack([matrix,apnea_matrix])
-    matrix = np.vstack([matrix,non_apnea_matrix[random_indices,:]])
-    print(f"apnea_matrix length: {apnea_matrix.shape[0]}, non_apnea_matrix length = {non_apnea_matrix.shape[0]}, matrix length = {matrix.shape[0]}")
+    return_Df = pd.concat([return_Df,apnea_matrix])
+    non_apnea_matrix = non_apnea_matrix.sample(min(len(apnea_matrix),len(non_apnea_matrix)))
+    return_Df = pd.concat([return_Df,non_apnea_matrix])
+    print(f"apnea_matrix length: {apnea_matrix.shape[0]}, non_apnea_matrix length = {non_apnea_matrix.shape[0]}, matrix length = {return_Df.shape[0]}")
 
 
 #
-print(matrix)
 
-pd.DataFrame(matrix).to_csv('./matrix.csv',index = True)
+
+from datetime import datetime
+
+# Get the current date and time
+end_datetime = datetime.now()
+
+# Format the datetime object as a string
+formatted_end_datetime = end_datetime.strftime("%Y-%m-%d %H:%M:%S")
+
+filename = end_datetime.strftime("backup-%Y-%m-%d_%H-%M-%S-matrix.csv")
+
+return_Df.to_csv(filename)
+print(f"Finished at {formatted_end_datetime}")
