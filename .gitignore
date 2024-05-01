@@ -1,2 +1,6 @@
 *.csv
 *.png
+*.pkl
+*.txt
+*.out
+*.err
